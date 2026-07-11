@@ -198,26 +198,34 @@ def get_hand_org(hand_pose, hand_beta, hand_trans, hand_layer):
     hand_origin = mano_keypoints_3d[:, 0]
     return hand_origin
 
+def _inference_device():
+    from lib.device_utils import get_inference_device
+    return get_inference_device()
+
+
 def proc_torch_cuda(d):
+    device = _inference_device()
     if not isinstance(d, torch.Tensor):
-        d = torch.FloatTensor(d)
-    if d.device != "cuda":
-        d = d.cuda()
+        d = torch.as_tensor(d, dtype=torch.float32)
+    if d.device != device:
+        d = d.to(device)
     return d
 
 def proc_long_torch_cuda(d):
+    device = _inference_device()
     if not isinstance(d, torch.Tensor):
-        d = torch.LongTensor(d)
-    if d.device != "cuda":
-        d = d.cuda()
+        d = torch.as_tensor(d, dtype=torch.long)
+    if d.device != device:
+        d = d.to(device)
     return d
 
 
 def proc_torch_frame(l):
+    device = _inference_device()
     if isinstance(l, list) or isinstance(l, np.ndarray):
-        l = [torch.FloatTensor(_l).unsqueeze(0) for _l in l]
+        l = [torch.as_tensor(_l, dtype=torch.float32).unsqueeze(0) for _l in l]
         l = torch.cat(l)
-        l = l.cuda()
+        l = l.to(device)
     return l
 
 def proc_numpy(d):

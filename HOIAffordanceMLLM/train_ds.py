@@ -5,6 +5,8 @@ import sys
 import time
 from functools import partial
 
+from llava.path_config import affdata_train_json, affdata_train_points
+
 import deepspeed
 import numpy as np
 import torch
@@ -233,10 +235,10 @@ def main(args):
                  1,
                  samples_per_epoch=100,
                  exclude_val=False,
-                 reason_seg_data="/root/tmp/affdata/point_train_all.txt",
+                 reason_seg_data=str(affdata_train_points()),
                  run_type = "train",
                  explanatory=-1,
-                 json_path = "/root/tmp/affdata/json_train_all.txt"
+                 json_path = str(affdata_train_json())
                  )
 
     if args.no_eval == False:

@@ -152,25 +152,30 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         
         idx = random.randint(0, len(self.json) - 1)
 
-        json_path = self.json[idx]
+        json_path_entry = self.json[idx].strip()
+        from llava.path_config import data_root
+
+        root = data_root()
+        json_path = (
+            str(root / json_path_entry)
+            if not os.path.isabs(json_path_entry)
+            else json_path_entry
+        )
         parts = json_path.split("/")
         file_name = parts[-1].split("_")
-        affordance_type = file_name[0]
-        if 'train' in affordance_type:
-            affordance_type = affordance_type[11:]
-        elif 'test' in affordance_type:
-            affordance_type = affordance_type[18:]
-        # print(affordance_type)
-        object_name = file_name[2]
+        if file_name[0] in ("test", "train"):
+            affordance_type = file_name[1]
+            object_name = file_name[2]
+        else:
+            affordance_type = file_name[0]
+            object_name = file_name[1]
         id = file_name[-1].split(".")[0]
         
         range_ = self.object_train_split[object_name]
         point_sample_idx = random.sample(range(range_[0],range_[1]), 1)
-        point_path = 'affdata/'+self.type+'/point_'+object_name+'_'+id+'.txt'
-        pa = '/root/tmp/'
-        # for id_x in point_sample_idx:
-                # point_path = self.point_files[id_x]
-        Points, affordance_label = self.extract_point_file(pa+point_path)
+
+        point_path = root / "affdata" / self.type / f"point_{object_name}_{id}.txt"
+        Points, affordance_label = self.extract_point_file(str(point_path))
         Points = pc_normalize(Points)
         Points = Points.transpose()
         affordance_label, affordance_index = self.get_affordance_label(affordance_type, affordance_label)
@@ -189,7 +194,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
 
 
 
-        sents, aff_type = get_info_from_json(pa+json_path)
+        sents, aff_type = get_info_from_json(json_path)
         if len(sents) >= self.num_classes_per_sample:
             sampled_inds = np.random.choice(
                 list(range(len(sents))), size=self.num_classes_per_sample, replace=False

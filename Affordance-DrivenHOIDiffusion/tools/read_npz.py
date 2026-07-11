@@ -1,8 +1,12 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 
-# 加载 .npz 文件
-npz_file = np.load('/home/zhzhang/桌面/Grasp/Text2HOI/data/grab/data.npz')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from lib.path_config import grab_data_root
 
-# 查看包含的数组名称
+npz_file = np.load(grab_data_root() / "data.npz")
+
 for key in npz_file:
     print(key, npz_file[key])

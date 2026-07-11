@@ -80,8 +80,10 @@ from hydra import initialize, compose
 import yaml
 
 import pickle
+from lib.path_config import afford_grab_pkl
+
 global afford_dict
-with open("/home/zhzhang/桌面/Research/LLM-GuidedGraspGeneration/Text2HOI/afford/data_grab.pkl", "rb") as f:
+with open(afford_grab_pkl(), "rb") as f:
     afford_dict = pickle.load(f)
 print(len(afford_dict.keys()))
 

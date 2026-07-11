@@ -5,7 +5,7 @@ chumpy
 pyrender
 moviepy
 matplotlib
-sentence-transformers
+sentence-transformers==3.0.1
 pysdf
 hydra-core
 hydra

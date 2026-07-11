@@ -5,10 +5,16 @@ import torch.nn.functional as F
 
 
 def load_and_freeze_clip(clip_version):
-    clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
-                                            jit=False)  # Must set jit=False for training
-    clip.model.convert_weights(
-        clip_model)  # Actually this line is unnecessary since clip by default already on float16
+    from lib.device_utils import get_inference_device
+
+    device = get_inference_device()
+    clip_model, clip_preprocess = clip.load(
+        clip_version, device="cpu", jit=False
+    ) # Must set jit=False for training
+    if device.type == "cpu":
+        clip_model = clip_model.float()
+    else:
+        clip.model.convert_weights(clip_model)
 
     # Freeze CLIP weights
     clip_model.eval()
@@ -27,7 +33,10 @@ def encoded_text_normalized(clip_model, text):
     normalized_vector = F.normalize(enc_text, p=2, dim=1)
     return normalized_vector
 
-def tokenize(raw_text, device="cuda"):
+def tokenize(raw_text, device=None):
+    if device is None:
+        from lib.device_utils import get_inference_device
+        device = get_inference_device()
     max_text_len = 20
 
     default_context_length = 77

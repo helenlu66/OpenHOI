@@ -17,7 +17,10 @@ import shutil
 import sys
 import time
 from functools import partial
-from knn_cuda import KNN
+try:
+    from knn_cuda import KNN
+except ImportError:
+    from openhoi_knn import KNN
 import deepspeed
 import numpy as np
 import torch
@@ -513,15 +516,11 @@ class DGCNN_Propagation(nn.Module):
     @staticmethod
     def fps_downsample(coor, x, num_group):
         xyz = coor.transpose(1, 2).contiguous() # b, n, 3
-        fps_idx = pointnet2_utils.furthest_point_sample(xyz, num_group)
+        fps_idx = farthest_point_sample(xyz, num_group)
 
         combined_x = torch.cat([coor, x], dim=1)
-
-        new_combined_x = (
-            pointnet2_utils.gather_operation(
-                combined_x, fps_idx
-            )
-        )
+        idx_expanded = fps_idx.unsqueeze(1).expand(-1, combined_x.shape[1], -1)
+        new_combined_x = torch.gather(combined_x, 2, idx_expanded)
 
         new_coor = new_combined_x[:, :3]
         new_x = new_combined_x[:, 3:]
@@ -680,7 +679,10 @@ class LisaMetaModel:
         self.point_model = modelss.create_uni3d()
         
 
-        checkpoint = torch.load("/root/tmp/uni3d/model.pt", map_location="cpu")
+        from llava.path_config import uni3d_checkpoint
+
+        checkpoint_path = os.environ.get("OPENHOI_UNI3D_CHECKPOINT") or str(uni3d_checkpoint())
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
         # logging.info('loaded checkpoint {}'.format(args.ckpt_path))
         sd = checkpoint['module']
         distributed = False
@@ -750,7 +752,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             
         self.seg_token_idx = kwargs.pop("seg_token_idx")
 
-        super().__init__(config)
+        # Build LisaModel once; skip LlavaLlamaForCausalLM's duplicate vision tower (saves RAM on Mac).
+        super(LlavaLlamaForCausalLM, self).__init__(config)
 
         self.model = LisaModel(config, **kwargs)
 
@@ -824,17 +827,18 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         batch_size = Point_embeddings.shape[0]
         assert batch_size == len(offset) - 1
 
+        device = input_ids.device
         seg_token_mask = input_ids[:, 1:] == self.seg_token_idx
         seg_token_mask = torch.cat(
             [
                 seg_token_mask,
-                torch.zeros((seg_token_mask.shape[0], 1)).bool().cuda(),
+                torch.zeros((seg_token_mask.shape[0], 1), dtype=torch.bool, device=device),
             ],
             dim=1,
         )
 
         seg_token_mask = torch.cat(
-            [torch.zeros((seg_token_mask.shape[0], 255)).bool().cuda(), seg_token_mask],
+            [torch.zeros((seg_token_mask.shape[0], 255), dtype=torch.bool, device=device), seg_token_mask],
             dim=1,
         )
         points = points.transpose(1,2)
@@ -867,14 +871,14 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         sequence_length = last_hidden_state.size(1)
         padding_length = max(0, sequence_length - seg_token_mask.size(1))
         seg_token_mask = torch.cat(
-                [torch.zeros((seg_token_mask.shape[0], padding_length), dtype=torch.bool).cuda(), seg_token_mask],dim=1,
+                [torch.zeros((seg_token_mask.shape[0], padding_length), dtype=torch.bool, device=device), seg_token_mask],dim=1,
                                     )
         pred_embeddings = last_hidden_state[seg_token_mask]
         seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
 
         seg_token_offset = seg_token_counts.cumsum(-1)
         seg_token_offset = torch.cat(
-            [torch.zeros(1).long().cuda(), seg_token_offset], dim=0
+            [torch.zeros(1, dtype=torch.long, device=device), seg_token_offset], dim=0
         )
 
         seg_token_offset = seg_token_offset[offset]

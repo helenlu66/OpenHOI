@@ -34,11 +34,11 @@ from constants.grab_constants import (
 )
 
 def preprocessing_text():
-    grab_config = load_config("/home/zhzhang/桌面/Grasp/Text2HOI/configs/dataset/grab.yaml")
-    print(1,grab_config)
-    data_root = grab_config.root
-    data_root = '/home/zhzhang/桌面/Grasp/Text2HOI/data/grab'
-    print(data_root)
+    from lib.path_config import grab_data_root
+
+    grab_config_path = osp.join(osp.dirname(osp.abspath(__file__)), "configs", "dataset", "grab.yaml")
+    grab_config = load_config(grab_config_path)
+    data_root = str(grab_data_root())
     text_json = grab_config.text_json
     
     data_list = glob.glob(osp.join(data_root, "data.npz"))

@@ -1,6 +1,15 @@
 import torch
 import torch.nn as nn
-from pointnet2_ops import pointnet2_utils
+try:
+    from pointnet2_ops import pointnet2_utils
+except ImportError:
+    import sys
+    from pathlib import Path
+
+    _openhoi_root = Path(__file__).resolve().parents[5]
+    if str(_openhoi_root) not in sys.path:
+        sys.path.insert(0, str(_openhoi_root))
+    from pointnet2_ops import pointnet2_utils
 import logging
 # from knn_cuda import KNN
 

@@ -1,14 +1,17 @@
 import json
+import sys
+from pathlib import Path
 
-# 假设你有一个名为 'data.json' 的 JSON 文件
-file_path = '/home/zhzhang/桌面/Grasp/Text2HOI/data/grab/text.json'
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from lib.path_config import grab_data_root
 
-# 打开文件并读取 JSON 数据
-with open(file_path, 'r', encoding='utf-8') as file:
+file_path = grab_data_root() / "text.json"
+
+with open(file_path, "r", encoding="utf-8") as file:
     data = json.load(file)
-cnt=0
-# 打印解析后的数据
+
+cnt = 0
 for i in data.items():
     print(i)
-    cnt+=1
-print(cnt,len(data))
+    cnt += 1
+print(cnt, len(data))

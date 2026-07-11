@@ -90,19 +90,38 @@ def wandb_login(
 
 def save_video(frames, fps, save_path):
     os.makedirs(osp.dirname(save_path), exist_ok=True)
-    height, width = frames.shape[1:3]
-    writer = cv2.VideoWriter(
-        save_path, 
-        cv2.VideoWriter_fourcc(*'mp4v'), 
-        fps, (width, height),
-    )
     if frames.shape[-1] == 4:
-        frames = frames[..., :3] # remove alpha channel
+        frames = frames[..., :3]
 
     if frames.max() <= 1:
-        frames = (frames*255).astype(np.uint8)
+        frames = (frames * 255).astype(np.uint8)
+    else:
+        frames = frames.astype(np.uint8)
+
+    try:
+        import imageio.v2 as imageio
+
+        imageio.mimsave(
+            save_path,
+            frames,
+            fps=fps,
+            codec="libx264",
+            macro_block_size=1,
+            ffmpeg_params=["-pix_fmt", "yuv420p"],
+        )
+        return
+    except Exception as exc:
+        print(f"imageio H.264 export failed ({exc}); falling back to OpenCV mp4v")
+
+    height, width = frames.shape[1:3]
+    writer = cv2.VideoWriter(
+        save_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
     for frame in tqdm.tqdm(frames, desc="saving video"):
-        writer.write(frame)
+        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
     writer.release()
     
 def save_mesh_obj(

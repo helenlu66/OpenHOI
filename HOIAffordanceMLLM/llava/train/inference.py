@@ -7,7 +7,28 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
 from functools import partial
+from llava.path_config import (
+    affdata_test_json,
+    affdata_test_points,
+    affdata_train_json,
+    affdata_train_points,
+    log_dir,
+)
+from llava.device_utils import dict_to_device, empty_device_cache, get_inference_device, use_deepspeed
 import torch
+
+# transformers 4.31 calls torch.empty(*scalar.size()) which fails for 0-d tensors.
+_torch_empty = torch.empty
+
+
+def _torch_empty_scalar_safe(*size, **kwargs):
+    if len(size) == 0:
+        return _torch_empty((), **kwargs)
+    return _torch_empty(*size, **kwargs)
+
+
+torch.empty = _torch_empty_scalar_safe
+
 import transformers
 import deepspeed
 from llava.constants import IGNORE_INDEX, DEFAULT_POINT_TOKEN, DEFAULT_PT_START_TOKEN, \
@@ -667,7 +688,7 @@ def collate_fn(
         questions_list.append(questions)
         cnt += len(conversations)
         offset_list.append(cnt)
-        affordance_label_list.append(torch.from_numpy(affordance_label))
+        affordance_label_list.append(torch.from_numpy(affordance_label).to(torch.float32))
         logist_label_list.append(logist_label)
 
     if use_mm_start_end:
@@ -768,28 +789,61 @@ def collate_fn(
 
 
 def dict_to_cuda(input_dict):
-    for k, v in input_dict.items():
-        if isinstance(input_dict[k], torch.Tensor):
-            input_dict[k] = v.cuda(non_blocking=True)
-        elif (
-            isinstance(input_dict[k], list)
-            and len(input_dict[k]) > 0
-            and isinstance(input_dict[k][0], torch.Tensor)
-        ):
-            input_dict[k] = [ele.cuda(non_blocking=True) for ele in v]
-    return input_dict
+    device = get_inference_device()
+    return dict_to_device(input_dict, device)
 
 
 
 
 import tqdm
-def validate(val_loader, model_engine, epoch, writer,length):
 
+
+def SIM(map1, map2, eps=1e-12):
+    map1, map2 = map1 / (map1.sum() + eps), map2 / (map2.sum() + eps)
+    return np.sum(np.minimum(map1, map2))
+
+
+def evaluate(aff_pred, aff_gt):
+    aff_pred = aff_pred.cpu().detach().numpy()
+    aff_gt = aff_gt.cpu().detach().numpy()
+
+    auc_aff = np.zeros((aff_gt.shape[0], aff_gt.shape[2]))
+    iou_aff = np.zeros((aff_gt.shape[0], aff_gt.shape[2]))
+    sim_matrix = np.zeros(aff_gt.shape[0])
+    iou_thres = np.linspace(0, 1, 20)
+
+    for b in range(aff_gt.shape[0]):
+        sim_matrix[b] = SIM(aff_pred[b], aff_gt[b])
+        aff_t_true = (aff_gt[b] >= 0.5).astype(int)
+        aff_p_score = aff_pred[b]
+        if np.sum(aff_t_true) == 0:
+            auc_aff[b] = np.nan
+            iou_aff[b] = np.nan
+        else:
+            try:
+                auc_aff[b] = roc_auc_score(aff_t_true, aff_p_score)
+            except ValueError:
+                auc_aff[b] = np.nan
+            temp_iou = []
+            for thre in iou_thres:
+                p_mask = (aff_p_score >= thre).astype(int)
+                intersect = np.sum(p_mask & aff_t_true)
+                union = np.sum(p_mask | aff_t_true)
+                temp_iou.append(1.0 * intersect / union)
+            iou_aff[b] = np.mean(np.array(temp_iou))
+
+    return np.nanmean(auc_aff), np.nanmean(iou_aff), np.mean(sim_matrix)
+
+
+def validate(val_loader, model_engine, epoch, writer, length):
+    auc_meter = AverageMeter("AUC", ":6.3f", Summary.SUM)
+    sim_meter = AverageMeter(" SIM", ":6.3f", Summary.SUM)
+    iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
     model_engine.eval()
 
-
+    pr_aff, gt_aff = [], []
     for input_dict in tqdm.tqdm(val_loader):
-        torch.cuda.empty_cache()
+        empty_device_cache()
         input_dict = dict_to_cuda(input_dict)
         points = input_dict["points"]
         input_ids = input_dict["input_ids"]
@@ -798,24 +852,37 @@ def validate(val_loader, model_engine, epoch, writer,length):
         offset = input_dict["offset"]
         aff_label = input_dict["aff_label"]
         logist_label = input_dict["logist_label"]
-        
 
-        with torch.no_grad():            
-            loss_ca,pred_affordance,aff_targets = model_engine(points=points,input_ids=input_ids,labels=labels,attention_masks = attention_masks,offset = offset,aff_label = aff_label,logist_label=logist_label )
+        with torch.no_grad():
+            _loss_ca, pred_affordance, aff_targets = model_engine(
+                points=points,
+                input_ids=input_ids,
+                labels=labels,
+                attention_masks=attention_masks,
+                offset=offset,
+                aff_label=aff_label,
+                logist_label=logist_label,
+            )
             aff_targets = aff_targets.unsqueeze(dim=-1)
-            pred_affordance =  torch.cat(pred_affordance, dim=0)
-            print(pred_affordance)
+            pred_affordance = torch.cat(pred_affordance, dim=0)
+            pr_aff.append(pred_affordance)
+            gt_aff.append(aff_targets)
 
-
-
-
-
-
-    return AUC_meter.avg
+    aff_preds = torch.cat(pr_aff, 0)
+    aff_targets = torch.cat(gt_aff, 0)
+    auc_, iou_, sim_ = evaluate(aff_preds, aff_targets)
+    auc_meter.update(auc_)
+    sim_meter.update(sim_)
+    iou_meter.update(iou_)
+    writer.add_scalar("AUC/val", auc_meter.avg, epoch)
+    writer.add_scalar("SIM/val", sim_meter.avg, epoch)
+    writer.add_scalar("IOU/val", iou_meter.avg, epoch)
+    print("AUC: {:.4f}, SIM: {:.4f}, IOU:{:.4f}".format(auc_meter.avg, sim_meter.avg, iou_meter.avg))
+    return auc_meter.avg
 
 def train():
-    os.makedirs("/root/tmp/log_dir", exist_ok=True)
-    writer = SummaryWriter("/root/tmp/log_dir")
+    os.makedirs(log_dir(), exist_ok=True)
+    writer = SummaryWriter(str(log_dir()))
 
     global local_rank
 
@@ -825,13 +892,15 @@ def train():
     
     data_args.with_color = model_args.with_color
     local_rank = training_args.local_rank
+    inference_device = get_inference_device()
+    rank0_print(f"Using inference device: {inference_device}")
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
 
     bnb_model_from_pretrained_args = {}
     if training_args.bits in [4, 8]:
         from transformers import BitsAndBytesConfig
         bnb_model_from_pretrained_args.update(dict(
-            device_map={"": training_args.device},
+            device_map={"": inference_device},
             load_in_4bit=training_args.bits == 4,
             load_in_8bit=training_args.bits == 8,
             quantization_config=BitsAndBytesConfig(
@@ -870,7 +939,7 @@ def train():
     if training_args.bits in [4, 8]:
         from transformers import BitsAndBytesConfig
         bnb_model_from_pretrained_args.update(dict(
-            device_map={"": training_args.device},
+            device_map={"": inference_device},
             load_in_4bit=training_args.bits == 4,
             load_in_8bit=training_args.bits == 8,
             quantization_config=BitsAndBytesConfig(
@@ -884,11 +953,22 @@ def train():
             )
         ))
 
+    if not torch.cuda.is_available():
+        load_dtype = torch.float32
+        use_low_cpu_mem = True
+    else:
+        load_dtype = None
+        use_low_cpu_mem = False
+
     model = LISAForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
+        torch_dtype=load_dtype,
+        low_cpu_mem_usage=use_low_cpu_mem,
         **bnb_model_from_pretrained_args
     )
+    if not torch.cuda.is_available():
+        model = model.to(inference_device)
 
     model.config.use_cache = False
 
@@ -1001,7 +1081,7 @@ def train():
             p.requires_grad = False
 
     if training_args.bits in [4, 8]:
-        model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
+        model.get_model().mm_projector.to(dtype=compute_dtype, device=inference_device)
 
     model.config.mm_use_pt_start_end = data_args.mm_use_pt_start_end = model_args.mm_use_pt_start_end
     model.config.mm_projector_lr = training_args.mm_projector_lr
@@ -1039,26 +1119,31 @@ def train():
         ):
             print("n: ", n, "p.shape: ", p.shape)
             p.requires_grad = True
-    world_size = torch.cuda.device_count()
-    train_dataset = ReasonSegDataset( 
+    world_size = max(1, torch.cuda.device_count())
+    eval_batch_size = 1 if not torch.cuda.is_available() else 4
+    eval_workers = 0 if not torch.cuda.is_available() else 4
+    eval_epochs = 1 if not torch.cuda.is_available() else 10
+    train_dataset = None
+    if use_deepspeed():
+        train_dataset = ReasonSegDataset(
+            1,
+            samples_per_epoch=2000 * 2 * 1 * 10,
+            exclude_val=False,
+            reason_seg_data=str(affdata_train_points()),
+            run_type="train",
+            explanatory=-1,
+            json_path=str(affdata_train_json()),
+        )
+
+    test_dataset = ReasonSegDataset(
                  1,
-                 samples_per_epoch=2000 * 2 * 1 * 10,
                  exclude_val=False,
-                 reason_seg_data="/root/tmp/affdata/point_train_all.txt",
-                 run_type = "train",
-                 explanatory=-1,
-                 json_path = "/root/tmp/affdata/json_train_all.txt"
-                 )
-    
-    test_dataset = ReasonSegDataset( 
-                 1,
-                 exclude_val=False,
-                 reason_seg_data="/root/tmp/affdata/point_test_all.txt",
+                 reason_seg_data=str(affdata_test_points()),
                  run_type = "test",
                  explanatory=-1,
-                 json_path = "/root/tmp/affdata/json_test_all.txt"
+                 json_path = str(affdata_test_json())
                  )
-    print(f"Training with {len(train_dataset)} examples.")
+    print(f"Evaluating with {len(test_dataset)} examples.")
 
 
     ds_config = {
@@ -1094,44 +1179,50 @@ def train():
         },
     }
 
-    model_engine, optimizer, train_loader, scheduler = deepspeed.initialize(
-        model=model,
-        model_parameters=model.parameters(),
-        training_data=train_dataset,
-        collate_fn=partial(
-            collate_fn,
-            tokenizer=tokenizer,
-            use_mm_start_end=model.config.mm_use_pt_start_end,
-            local_rank=local_rank,
-        ),
-        config=ds_config,
-    )
+    model_engine = model
+    train_loader = None
+    if use_deepspeed():
+        model_engine, optimizer, train_loader, scheduler = deepspeed.initialize(
+            model=model,
+            model_parameters=model.parameters(),
+            training_data=train_dataset,
+            collate_fn=partial(
+                collate_fn,
+                tokenizer=tokenizer,
+                use_mm_start_end=model.config.mm_use_pt_start_end,
+                local_rank=local_rank,
+            ),
+            config=ds_config,
+        )
+    else:
+        model_engine = model.to(inference_device)
+        model_engine.eval()
+        rank0_print("DeepSpeed disabled; running CPU/MPS inference.")
 
+    resume_path = training_args.resume or os.environ.get("OPENHOI_MLLM_CHECKPOINT", "")
+    if not resume_path and training_args.auto_resume:
+        candidate = training_args.output_dir
+        if os.path.isfile(os.path.join(candidate, "mp_rank_00_model_states.pt")):
+            resume_path = candidate
+    if resume_path and os.path.isfile(os.path.join(resume_path, "mp_rank_00_model_states.pt")):
+        if use_deepspeed():
+            load_path, _client_state = model_engine.load_checkpoint(resume_path)
+            rank0_print(f"Loaded DeepSpeed checkpoint from {load_path or resume_path}")
+        else:
+            rank0_print(
+                "Found OPENHOI_MLLM_CHECKPOINT but DeepSpeed is disabled. "
+                "Set OPENHOI_USE_DEEPSPEED=1 on a CUDA machine to load the fine-tuned MLLM weights."
+            )
 
-
-
-    
-
-
-
-    test_dataset = ReasonSegDataset( 
-                 1,
-                 exclude_val=False,
-                 reason_seg_data="/root/tmp/affdata/point_test_all.txt",
-                 run_type = "test",
-                 explanatory=-1,
-                 json_path = "/root/tmp/affdata/json_test_all.txt"
-                 )
-
-    train_iter = iter(train_loader)
+    train_iter = iter(train_loader) if train_loader is not None else None
     test_leng = len(test_dataset)
     best_auc = 0.0
-    for epoch in range(0, 10):
+    for epoch in range(0, eval_epochs):
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
-            batch_size=4,
+            batch_size=eval_batch_size,
             shuffle=False,
-            num_workers=4,
+            num_workers=eval_workers,
             collate_fn=partial(
                 collate_fn,
                 tokenizer=tokenizer,

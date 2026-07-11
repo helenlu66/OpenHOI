@@ -23,6 +23,13 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
 from functools import partial
+from llava.path_config import (
+    affdata_test_json,
+    affdata_test_points,
+    affdata_train_json,
+    affdata_train_points,
+    log_dir,
+)
 import torch
 import transformers
 import deepspeed
@@ -675,8 +682,8 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 from torch.utils.tensorboard import SummaryWriter
 
 def train():
-    os.makedirs("/root/tmp/log_dir", exist_ok=True)
-    writer = SummaryWriter("/root/tmp/log_dir")
+    os.makedirs(log_dir(), exist_ok=True)
+    writer = SummaryWriter(str(log_dir()))
 
     global local_rank
 
@@ -905,19 +912,19 @@ def train():
                  1,
                  samples_per_epoch=2000 * 2 * 1 * 10,
                  exclude_val=False,
-                 reason_seg_data="/root/tmp/affdata/point_train_all.txt",
+                 reason_seg_data=str(affdata_train_points()),
                  run_type = "train",
                  explanatory=-1,
-                 json_path = "/root/tmp/affdata/json_train_all.txt"
+                 json_path = str(affdata_train_json())
                  )
     
     test_dataset = ReasonSegDataset( 
                  1,
                  exclude_val=False,
-                 reason_seg_data="/root/tmp/affdata/point_test_all.txt",
+                 reason_seg_data=str(affdata_test_points()),
                  run_type = "test",
                  explanatory=-1,
-                 json_path = "/root/tmp/affdata/json_test_all.txt"
+                 json_path = str(affdata_test_json())
                  )
     print(f"Training with {len(train_dataset)} examples.")
 
@@ -975,7 +982,7 @@ def train():
 
     # resume deepspeed checkpoint
     # if training_args.auto_resume and len(training_args.resume) == 0:
-    #     resume = os.path.join("/root/tmp/log_dir", "ckpt_model")
+    #     resume = os.path.join(log_dir(), "ckpt_model")
     #     if os.path.exists(resume):
     #         training_args.resume = resume
 
@@ -1026,11 +1033,11 @@ def train():
         best_auc = max(auc,best_auc)
 
         if is_best:
-            save_dir = os.path.join("/root/tmp/log_dir", "ckpt_model")
+            save_dir = os.path.join(log_dir(), "ckpt_model")
             torch.save(
                     {"epoch": epoch},
                     os.path.join(
-                        "/root/tmp/log_dir",
+                        log_dir(),
                         "meta_log_AUC{:.3f}.pth".format(
                             best_auc
                         ),

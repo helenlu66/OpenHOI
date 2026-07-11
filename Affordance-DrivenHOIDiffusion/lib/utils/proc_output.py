@@ -1,8 +1,33 @@
 import numpy as np
+from collections import namedtuple
+from typing import Optional
 
 import torch
-from pytorch3d.ops.knn import knn_points
-from pytorch3d.structures import Meshes
+
+try:
+    from pytorch3d.ops.knn import knn_points as _pytorch3d_knn_points
+    from pytorch3d.structures import Meshes
+except ImportError:
+    _pytorch3d_knn_points = None
+    Meshes = None
+
+
+def knn_points(
+    p1: torch.Tensor,
+    p2: torch.Tensor,
+    lengths1: Optional[torch.Tensor] = None,
+    lengths2: Optional[torch.Tensor] = None,
+    K: int = 1,
+):
+    """KNN with pytorch3d when available; otherwise batched cdist fallback."""
+    if _pytorch3d_knn_points is not None:
+        return _pytorch3d_knn_points(
+            p1, p2, lengths1=lengths1, lengths2=lengths2, K=K
+        )
+    _KNN = namedtuple("KNN", ["dists", "idx"])
+    dists = torch.cdist(p1, p2)
+    knn_dists, knn_idx = torch.topk(dists, K, dim=-1, largest=False, sorted=True)
+    return _KNN(dists=knn_dists, idx=knn_idx)
 
 from lib.utils.rot import (
     rot6d_to_axis_angle, 
@@ -126,6 +151,8 @@ def get_hand_obj_dist_map(
     return pred_ldist_map, pred_rdist_map
 
 def get_pytorch3d_meshes(pred_X0_hand, hand_layer):
+    if Meshes is None:
+        raise ImportError("pytorch3d is required for get_pytorch3d_meshes")
     hand_verts = get_hand_verts(pred_X0_hand, hand_layer)
     hand_verts = hand_verts.reshape(-1, 778, 3)
     hand_faces = torch.LongTensor(hand_layer.faces.astype(np.int16)).cuda()

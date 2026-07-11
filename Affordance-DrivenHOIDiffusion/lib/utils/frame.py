@@ -15,9 +15,9 @@ def get_valid_mask(is_lhand, is_rhand, nframes, valid_nframes):
     if not is_rhand:
         valid_mask_rhand[:] = 0
     return (
-        valid_mask_lhand.astype(np.bool), 
-        valid_mask_rhand.astype(np.bool), 
-        valid_mask_obj.astype(np.bool)
+        valid_mask_lhand.astype(bool),
+        valid_mask_rhand.astype(bool),
+        valid_mask_obj.astype(bool),
     )
 
 def get_frame_align_data_format(key, ndata, max_nframes):

@@ -21,7 +21,14 @@ class CLIPVisionTower(nn.Module):
         self.is_loaded = False
 
     def load_model(self):
-        ckpt = torch.load("/root/tmp/zeroshot/large/best_lvis.pth", map_location='cpu')
+        from pathlib import Path
+
+        from llava.path_config import vision_ckpt
+
+        ckpt_path = self.vision_tower_path or str(vision_ckpt())
+        if not Path(ckpt_path).is_file():
+            ckpt_path = str(vision_ckpt())
+        ckpt = torch.load(ckpt_path, map_location='cpu')
         state_dict = {k.replace("module.", ""): v for k, v in ckpt['base_model'].items()}
         self.vision_tower.load_state_dict(state_dict, strict=True)
         self.vision_tower.requires_grad_(False)
