@@ -12,6 +12,7 @@ source is untouched.
 | [`openhoi_cpu_b.py`](openhoi_cpu_b.py) | The whole compatibility layer. `install()` before importing `lib.*`. |
 | [`infer_stageb_cpu.py`](infer_stageb_cpu.py) | Single-sample driver (replicates `create_hoi`'s plain-sampling path on CPU). |
 | [`setup_stageb_cpu.sh`](setup_stageb_cpu.sh) | Symlinks the config's relative asset paths to real locations. |
+| [`render_hoi.py`](render_hoi.py) | Headless matplotlib renderer: motion `.npz` → `.mp4` (no GL/display needed). |
 
 `openhoi_cpu_b.install()` (all CPU-only bits gated behind `not torch.cuda.is_available()`, so it's inert on a GPU box):
 
@@ -47,9 +48,27 @@ python infer_stageb_cpu.py \
 ```
 
 Output `.npz`: `refined_x_lhand (T,99)`, `refined_x_rhand (T,99)`,
-`refined_x_obj (T,9)` — MANO hand params + object 6-DoF over ~T frames. Without
-`--aff-map` a uniform placeholder is used (pipeline test only). Verified on CPU:
-"Lift the elephant" → 150-frame motion, diffusion ~1000 steps at ~18 it/s.
+`refined_x_obj (T,9)` — MANO hand params + object 6-DoF over ~T frames — plus the
+derived meshes (`obj_verts_tf`, `lhand_verts`/`faces`, `rhand_verts`/`faces`).
+Without `--aff-map` a uniform placeholder is used (pipeline test only). Verified
+on CPU: "Lift the elephant" → 150-frame motion, diffusion ~1000 steps at ~18 it/s.
+
+### Video export
+
+Add `--video out.mp4` to the driver to render the interaction, or render later
+from the saved `.npz` (fast — meshes are cached, no re-generation):
+
+```bash
+python infer_stageb_cpu.py --text "..." --aff-map ... --output m.npz --video m.mp4
+# or re-render an existing result with a different view:
+python render_hoi.py m.npz --out m.mp4 --fps 30 --elev 18 --azim 60
+```
+
+The renderer uses matplotlib's Agg backend (works headless / over SSH; no GL
+context, unlike pyrender/open3d). Hands are drawn as solid MANO meshes (left
+blue, right red), the object as a semi-transparent mesh (auto-decimated to
+≤2500 faces for speed). Verified: 149-frame 512×512 mp4 of the hand grasping the
+elephant.
 
 ## True end-to-end (aligned affordance)
 

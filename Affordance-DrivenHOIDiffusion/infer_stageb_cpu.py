@@ -41,6 +41,8 @@ def parse_args():
     p.add_argument("--aff-map", default="", help="1024 affordance values aligned to the object cloud.")
     p.add_argument("--guidance", type=float, default=2.5)
     p.add_argument("--output", default="/tmp/hoi_stageb.npz")
+    p.add_argument("--video", default="", help="Also render an mp4 of the interaction here.")
+    p.add_argument("--fps", type=int, default=30)
     p.add_argument("--dump-obj-pc", default="",
                    help="Write the object's 1024x3 normalized cloud here (feed it to Stage A) and exit.")
     return p.parse_args()
@@ -159,17 +161,42 @@ def main():
     refined_x_lhand, refined_x_rhand = refiner(
         input_lhand, input_rhand, valid_mask_lhand=valid_mask_lhand, valid_mask_rhand=valid_mask_rhand)
 
-    np.savez(
-        args.output,
+    # Convert params -> meshes (for saving + rendering) via the upstream helpers.
+    from lib.utils.data import process_hand_result, process_obj_result
+
+    def _lh(): return bool(is_lhand[0]) if hasattr(is_lhand, "__len__") else bool(is_lhand)
+    def _rh(): return bool(is_rhand[0]) if hasattr(is_rhand, "__len__") else bool(is_rhand)
+
+    obj_v = obj_verts[0] if isinstance(obj_verts, (list, tuple)) else obj_verts
+    obj_verts_tf = process_obj_result(obj_v, refined_x_obj[0], data_cfg.name).detach().cpu().numpy()
+    obj_faces_np = np.asarray(obj_faces[0] if isinstance(obj_faces, (list, tuple)) else obj_faces)
+
+    save = dict(
         text=text[0],
         refined_x_lhand=refined_x_lhand[0].detach().cpu().numpy(),
         refined_x_rhand=refined_x_rhand[0].detach().cpu().numpy(),
         refined_x_obj=refined_x_obj[0].detach().cpu().numpy(),
         nframes=int(duration[0].item()),
+        obj_verts_tf=obj_verts_tf,
+        obj_faces=obj_faces_np,
     )
+    if _lh():
+        lv, lf = process_hand_result(lhand_layer, refined_x_lhand[0])
+        save["lhand_verts"] = lv.detach().cpu().numpy(); save["lhand_faces"] = lf.cpu().numpy()
+    if _rh():
+        rv, rf = process_hand_result(rhand_layer, refined_x_rhand[0])
+        save["rhand_verts"] = rv.detach().cpu().numpy(); save["rhand_faces"] = rf.cpu().numpy()
+
+    np.savez(args.output, **save)
     print(f"[ok] wrote motion to {args.output}  "
           f"(lhand {tuple(refined_x_lhand[0].shape)}, rhand {tuple(refined_x_rhand[0].shape)}, "
           f"obj {tuple(refined_x_obj[0].shape)}, ~{int(duration[0].item())} frames)")
+
+    if args.video:
+        import render_hoi
+        print(f"[..] rendering video -> {args.video}")
+        render_hoi.render_from_npz(args.output, args.video, fps=args.fps)
+        print(f"[ok] wrote video to {args.video}")
 
 
 if __name__ == "__main__":
