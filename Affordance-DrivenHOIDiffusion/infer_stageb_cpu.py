@@ -110,6 +110,10 @@ def main():
      obj_cent, obj_scale, obj_verts, obj_faces, obj_top_idx, obj_pc_top_idx) = \
         get_object_hand_info(object_model, clip_model, text, data_cfg.obj_root, data_cfg, mpnet)
 
+    # NOTE: we deliberately do NOT correct the upstream CLIP-similarity hand
+    # guess, even though it is unreliable (CLIP text embeddings barely separate
+    # "right" vs "left" hand). Faithfully surfacing that failure mode is the point
+    # of the evaluation harness in model_eval/.
     bs, npts = normalized_obj_pc.shape[:2]
     print(f"[ok] object cloud: {tuple(normalized_obj_pc.shape)}  lhand={is_lhand} rhand={is_rhand}")
 
